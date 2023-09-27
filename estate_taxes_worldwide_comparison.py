@@ -20,12 +20,61 @@ import plotly.graph_objects as go
 import pandas as pd
 from scipy import stats
 from PIL import Image
-# also requires kaleido package
+import csv
 
-max_estate_size = 100    # x axis max - largest estate size we chart, as multiple of average earnings
+MAX_ESTATE_SIZE = 100    # x axis max - largest estate size we chart, as multiple of average earnings
+ESTATE_RESOLUTION = 0.1  # the steps we go up
+UK_AVERAGE_WAGE = 36987
+Y_AXIS_HEIGHT = 0.40
+
+LINES_TO_ADD_TO_CHART = {335000: "£335k (the UK average)<br>UK estate value",
+                        1000000: "£1m<br>UK estate value",
+                        2700000: "£2.7m<br>UK estate value"}
+
+EXCEL_FILE = "estate-taxes_worldwide_data.xlsx"
+EXCEL_TAB = "IHT bands - children"
+LOGO_JPG_FILE = Image.open("logo_full_white_on_blue.jpg")
+FORCE_PLOT_COUNTRIES = ["United States"]   # we will plot these, even if there is zero ETR
 
 
-def add_line_for_UK_estate_value(fig, position, max_height, annotation_text, colour):
+def dict_to_csv(data_dict, filename='estate_taxes_worldwide_comparison.csv'):
+    with open(filename, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        
+        # Write headers
+        writer.writerow(data_dict.keys())
+        
+        # Write data rows
+        for row in zip(*data_dict.values()):
+            writer.writerow(row)
+            
+
+def initialise_export_table():
+    table = {}
+    table["Estate value"] = []
+    for estate_value in [estate_value * ESTATE_RESOLUTION for estate_value in range(0, int(MAX_ESTATE_SIZE / ESTATE_RESOLUTION) + 1)]:
+        table["Estate value"].append(estate_value)
+    return table
+
+def create_layout_for_plot(logo_layout):
+
+    return go.Layout(
+        images=logo_layout,
+        title="Estate value (as multiple of average earnings) vs theoretical effective IHT/estate tax rate<br>for children inheriting from two parents",
+        xaxis=dict(
+            title="Estate value (multiple of average earnings)",
+            zeroline=True,
+            range=[0, MAX_ESTATE_SIZE * 1.05],
+            dtick=10
+        ),
+        yaxis=dict(
+            title="Effective rate",
+            tickformat=',.0%',  # so we get nice percentages,
+            zeroline=True,
+            range=[0, Y_AXIS_HEIGHT]
+        ) )
+
+def add_line_for_UK_estate_value(position, max_height, annotation_text, colour):
     fig.add_shape(
         dict(type="line", x0=position, x1=position, y0=0, y1=max_height * 1.1,
             line=dict(color=colour, width=3))
@@ -46,90 +95,65 @@ def add_line_for_UK_estate_value(fig, position, max_height, annotation_text, col
             yanchor="top"
         )
     )
-    return fig
+    
+    
+def add_annotations_to_chart():
+    for amount, note in LINES_TO_ADD_TO_CHART.items():
+        add_line_for_UK_estate_value(amount / UK_AVERAGE_WAGE, Y_AXIS_HEIGHT, note, "Grey")
+    
+    add_note_about_zero_iht_countres("<b>No IHT/estate tax:</b><br>Hungary, Lithuania,<br>Portugal (for children), Poland,<br>Slovenia, Sweden, Switzerland")
+        
+    
+def add_note_about_zero_iht_countres(note_text):
+    fig.add_annotation(
+        dict(
+            x=10,
+            y=0.35,
+            text=note_text,
+            showarrow=False,
+            font=dict(
+                size=14,
+                color="black"
+            ),
+            align="left",
+            xanchor="left",
+            yanchor="top"
+        )
+    )
 
 
-
-
-estate_resolution = 0.1  # the steps we go up
-
-excel_file = "estate-taxes_worldwide_data.xlsx"
-
-logo_jpg = Image.open("logo_full_white_on_blue.jpg")
-
-all_countries = []
-country_max_effective_rate = []
-country_estate_tax_of_GDP = []
-country_max_statutory_rate = []
-
-# create plotly graph object
-# layout settings
-
-logo_layout = [dict(
-        source=logo_jpg,
+def add_logo_layout():
+    return [dict(
+        source=LOGO_JPG_FILE,
         xref="paper", yref="paper",
         x=1, y=1.03,
         sizex=0.1, sizey=0.1,
         xanchor="right", yanchor="bottom"
     )]
 
-layout = go.Layout(
-    images=logo_layout,
-    title="Estate value (as multiple of average earnings) vs theoretical effective IHT/estate tax rate<br>for children inheriting from two parents",
-    xaxis=dict(
-        title="Estate value (multiple of average earnings)",
-        zeroline=True,
-        range=[0, max_estate_size * 1.05],
-        dtick=10
-    ),
-    yaxis=dict(
-        title="Effective rate",
-        tickformat=',.0%',  # so we get nice percentages,
-        zeroline=True,
-        range=[0, 0.40]
-    ) )
 
-fig = go.Figure(layout=layout)
-
-
-
-print(f"Opening {excel_file}")
-xl = pd.ExcelFile(excel_file)
-print("")
-print(f"Opened spreadsheet. Sheets: {xl.sheet_names}")
-
-print("")
-print("Data for export:")
-print("-------------------------------")
-
-df = xl.parse("IHT bands - children")
-
-do_header = True
-
-for country_row in range (0,len(df)):
-    country_name = df.iat[country_row, 0]
-    export_headings = " , "
-    export_row = f"{country_name}, "
-
-    x_data = []  # income multiple
-    y_data = []  # effective rate
-
+def create_list_of_iht_bands(row_data):
 #   first load bands into a list of dicts
     band = 0
-    bands = []
-    while not pd.isna(df.iat[country_row, band * 2 + 5]):   # this keeps going til we hit a NaN
-        threshold =  df.iat[country_row, band * 2 + 5]   # this is % of average earnings
-        rate = df.iat[country_row, band * 2 + 6]
-        bands.append({"threshold": threshold, "rate": rate})
+    iht_bands = []
+    while not pd.isna(df.iat[row_data, band * 2 + 5]):   # this keeps going til we hit a NaN
+        threshold =  df.iat[row_data, band * 2 + 5]   # this is % of average earnings
+        rate = df.iat[row_data, band * 2 + 6]
+        iht_bands.append({"threshold": threshold, "rate": rate})
         band += 1
 
     # add a dummy band higher than all estate values - makes algorithm for applying bands cleaner/easier
-    bands.append({"threshold": 10000, "rate": df.iat[country_row, (band-1) * 2 + 6]})
+    iht_bands.append({"threshold": 10000, "rate": df.iat[row_data, (band-1) * 2 + 6]})
+    return iht_bands
 
-    # print(f"bands: {bands}")
+
+def calculate_ETFs_for_country(country_name, bands, country_row):
+    x_data = []  # income multiple
+    y_data = []  # effective rate
 
     # loop estate values 0 to 50 x average salary, in 0.1 increments
-    for estate_value in [estate_value * estate_resolution for estate_value in range(0, int(max_estate_size / estate_resolution) + 1)]:
+    all_export_data[country_name] = []
+    for estate_value in [estate_value * ESTATE_RESOLUTION for estate_value in range(0, int(MAX_ESTATE_SIZE / ESTATE_RESOLUTION) + 1)]:
 
         if estate_value == 0:
             # can't calculate ETR for zero value estates
@@ -163,26 +187,18 @@ for country_row in range (0,len(df)):
                 break
 
         ETR = total_tax/estate_value
-        #print(f"estate value: {round(estate_value, 1)} - effective tax rate {100*ETR}% (residence nil band is {resi_nil_rate_band})")
+        # print(f"estate value: {round(estate_value, 1)} - effective tax rate {100*ETR}% (residence nil band is {resi_nil_rate_band})")
         x_data.append(round(estate_value,2))
-        export_headings += f"{estate_value}, "
 
         y_data.append(ETR)
-        export_row += f"{ETR}, "
+        all_export_data[country_name].append(ETR)
+        
+    return x_data, y_data, bands[-1]["rate"]
 
-    # let's keep countries with no IHT off the data - but include the US (as otherwise its high exemption will artifically exclude it)
-    if bands[x]["rate"] == 0 and country_name != "United States":
-        # print ("this country has no estate tax at this level - so nothing to plot! (and US will be in this category unless max_estate_size is large)")
-        continue
 
-    if do_header:
-        print(export_headings)
-        do_header = False
-
-    print(export_row)
-
+def plot_country_data(country_name, x_data, y_data):
     # add label to last data item showing country (bit hacky; must be better way)
-    labels = [""] * (int(max_estate_size / estate_resolution) - 1)
+    labels = [""] * (int(MAX_ESTATE_SIZE / ESTATE_RESOLUTION) - 1)
     labels.append(country_name)
 
     fig.add_trace(go.Scatter(
@@ -195,149 +211,96 @@ for country_row in range (0,len(df)):
         showlegend=False
     ))
 
-    # while we're at it, collate data for second chart
-    all_countries.append(country_name)
-    country_estate_tax_of_GDP.append(df.iat[country_row, 1])
-    country_max_effective_rate.append(ETR)
-    country_max_statutory_rate.append(bands[x]["rate"])
+if __name__ == "__main__":
 
-    # now loop to next country
-print("-------------------------------")
+    all_countries = []
+    country_estate_tax_of_GDP = []
+    country_max_statutory_rate = []
 
-uk_average_wage = 36987
-fig = add_line_for_UK_estate_value(fig, 335000 / uk_average_wage, 0.40, "£335k (the UK average)<br>UK estate value", "Grey")
-fig = add_line_for_UK_estate_value(fig, 1000000 / uk_average_wage, 0.40, "£1m<br>UK estate value", "Grey")
-fig = add_line_for_UK_estate_value(fig, 2700000 / uk_average_wage, 0.40, "£2.7m<br>UK estate value", "Grey")
+    logo_layout = add_logo_layout()
+    fig = go.Figure(layout=create_layout_for_plot(logo_layout))
+
+    xl = pd.ExcelFile(EXCEL_FILE)
+    df = xl.parse(EXCEL_TAB)
+
+    all_export_data = initialise_export_table()
+
+
+    for country_row in range (0,len(df)):
+        country_name = df.iat[country_row, 0]
+        
+        bands = create_list_of_iht_bands(country_row)
+        x_data, y_data, max_rate = calculate_ETFs_for_country(country_name, bands, country_row)
+
+        # Only plot for countries where there is IHT (the US is a special case)
+        if max_rate > 0 or country_name in FORCE_PLOT_COUNTRIES:
+            plot_country_data(country_name, x_data, y_data)
+
+            # while we're at it, collate data for second chart
+            all_countries.append(country_name)
+            country_estate_tax_of_GDP.append(df.iat[country_row, 1])
+            country_max_statutory_rate.append(max_rate)
+        
+    add_annotations_to_chart()
     
-fig.add_annotation(
-    dict(
-        x=10,
-        y=0.35,
-        text="<b>No IHT/estate tax:</b><br>Hungary, Lithuania,<br>Portugal (for children), Poland,<br>Slovenia, Sweden, Switzerland",
-        showarrow=False,
-        font=dict(
-            size=14,
-            color="black"
+    fig.show()
+
+    print ("All done!")
+    dict_to_csv(all_export_data)
+
+    # second chart - maximum rate vs IHT as % of GDP
+    layout = go.Layout(
+        images=logo_layout,
+        title=f"Maximum statutory IHT/estate tax rate (children inheriting), vs tax collected as % of GDP",
+        xaxis=dict(
+            title="Maximum statutory IHT/estate tax rate",
+            tickformat=',.0%'  # so we get nice percentages
         ),
-        align="left",
-        xanchor="left",
-        yanchor="top"
+        yaxis=dict(
+            title="IHT/estate tax collected as % of GDP",
+            tickformat='.2%'  # so we get nice percentages
+        ))
+
+    fig2 = go.Figure(layout=layout)
+
+    fig2.add_trace(go.Scatter(
+        x=country_max_statutory_rate,
+        y=country_estate_tax_of_GDP,
+        mode="markers+text",  # no markers
+        name="markers and Text",
+        text=all_countries,
+        textposition="top center",
+        showlegend=False))
+
+    fig2.add_layout_image(
+        dict(
+            source="www.taxpolicy.org.uk/wp-content/uploads/2022/04/Asset-1@2x-8.png",
+            xref="paper", yref="paper",
+            x=0.1, y=0.01,
+            sizex=0.2, sizey=0.2,
+            xanchor="right", yanchor="bottom"
+        )
     )
-)
-    
-fig.show()
-
-print ("All done!")
-exit()
-
-# second chart - effective rate vs IHT as % of GDP
-layout = go.Layout(
-    images=logo_layout,
-    title=f"Effective IHT/estate tax rate on estates {max_estate_size}x average earnings, vs tax collected as % of GDP",
-    xaxis=dict(
-        title="Effective IHT/estate tax rate",
-        tickformat=',.0%'  # so we get nice percentages
-    ),
-    yaxis=dict(
-        title="IHT/estate tax collected as % of GDP",
-        tickformat='.2%'  # so we get nice percentages
-    ))
-
-fig2 = go.Figure(layout=layout)
-
-fig2.add_trace(go.Scatter(
-    x=country_max_effective_rate,
-    y=country_estate_tax_of_GDP,
-    mode="markers+text",  # no markers
-    name="markers and Text",
-    text=all_countries,
-    textposition="top center",
-    showlegend=False))
-
-slope, intercept, r_value, p_value, std_err = stats.linregress(country_max_effective_rate, country_estate_tax_of_GDP)
-best_fit_y = []
-
-print(f"Slope {slope}, intercept {intercept}, r value{r_value}")
-
-# create data for trendline
-for x in country_max_effective_rate:
-    best_fit_y.append(intercept + x * slope)
-
-# plot trendline
-fig2.add_trace(go.Scatter(
-    x=country_max_effective_rate,
-    y=best_fit_y,
-    mode="lines",
-    name="lines",
-    showlegend=False))
-
-fig2.show()
-fig2.write_image(f"OECD_IHT_vs_GDP_{max_estate_size}x.svg")
 
 
+    slope, intercept, r_value, p_value, std_err = stats.linregress(country_max_statutory_rate, country_estate_tax_of_GDP)
+    best_fit_y = []
 
-# third chart - maximum rate vs IHT as % of GDP
-layout = go.Layout(
-    images=logo_layout,
-    title=f"Maximum statutory IHT/estate tax rate (children inheriting), vs tax collected as % of GDP",
-    xaxis=dict(
-        title="Maximum statutory IHT/estate tax rate",
-        tickformat=',.0%'  # so we get nice percentages
-    ),
-    yaxis=dict(
-        title="IHT/estate tax collected as % of GDP",
-        tickformat='.2%'  # so we get nice percentages
-    ))
+    print(f"Slope {slope}, intercept {intercept}, r value{r_value}")
 
-fig3 = go.Figure(layout=layout)
+    # create data for trendline
+    for x in country_max_statutory_rate:
+        best_fit_y.append(intercept + x * slope)
 
-fig3.add_trace(go.Scatter(
-    x=country_max_statutory_rate,
-    y=country_estate_tax_of_GDP,
-    mode="markers+text",  # no markers
-    name="markers and Text",
-    text=all_countries,
-    textposition="top center",
-    showlegend=False))
+    # plot trendline
+    fig2.add_trace(go.Scatter(
+        x=country_max_statutory_rate,
+        y=best_fit_y,
+        mode="lines",
+        name="lines",
+        showlegend=False))
 
-fig3.add_layout_image(
-    dict(
-        source="www.taxpolicy.org.uk/wp-content/uploads/2022/04/Asset-1@2x-8.png",
-        xref="paper", yref="paper",
-        x=0.1, y=0.01,
-        sizex=0.2, sizey=0.2,
-        xanchor="right", yanchor="bottom"
-    )
-)
+    # now plot it:
+    fig2.show()
 
-
-slope, intercept, r_value, p_value, std_err = stats.linregress(country_max_statutory_rate, country_estate_tax_of_GDP)
-best_fit_y = []
-
-print(f"Slope {slope}, intercept {intercept}, r value{r_value}")
-
-# create data for trendline
-for x in country_max_statutory_rate:
-    best_fit_y.append(intercept + x * slope)
-
-# plot trendline
-fig3.add_trace(go.Scatter(
-    x=country_max_statutory_rate,
-    y=best_fit_y,
-    mode="lines",
-    name="lines",
-    showlegend=False))
-
-# now plot it:
-fig3.show()
-
-print("")
-print("Data for export:")
-print(all_countries)
-print("")
-print(country_max_statutory_rate)
-print("")
-print(country_estate_tax_of_GDP)
-print ("------------")
-
-print("All done!")
+    print("All done!")
